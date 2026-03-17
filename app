@@ -2,8 +2,6 @@ import streamlit as st
 import yfinance as yf
 import pandas as pd
 import numpy as np
-import matplotlib
-matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 import base64
 
@@ -18,16 +16,16 @@ def play_sound(file_path):
         b64 = base64.b64encode(data).decode()
 
     audio_html = f"""
-        <audio autoplay>
-        <source src="data:audio/mp3;base64,{b64}" type="audio/mp3">
-        </audio>
+    <audio autoplay>
+    <source src="data:audio/mp3;base64,{b64}" type="audio/mp3">
+    </audio>
     """
     st.markdown(audio_html, unsafe_allow_html=True)
 
 # ================= INPUT =================
-stock = st.text_input("Enter Stock Symbol (e.g., AAPL, TSLA)", "AAPL")
+stock = st.text_input("Enter Stock Symbol (e.g., AAPL, TSLA, INFY.NS)", "AAPL")
 
-# ================= FUNCTION =================
+# ================= ANALYSIS FUNCTION =================
 def analyze_stock(data):
 
     # Moving Averages
@@ -48,9 +46,8 @@ def analyze_stock(data):
     data["Signal"] = data["MACD"].ewm(span=9, adjust=False).mean()
 
     # Bollinger Bands
-    close = data["Close"]
-    data["BB_Mid"] = close.rolling(20).mean()
-    std = close.rolling(20).std()
+    data["BB_Mid"] = data["Close"].rolling(20).mean()
+    std = data["Close"].rolling(20).std()
     data["BB_Upper"] = data["BB_Mid"] + 2 * std
     data["BB_Lower"] = data["BB_Mid"] - 2 * std
 
@@ -60,10 +57,7 @@ def analyze_stock(data):
     score = 0
 
     # Trend
-    if latest["MA50"] > latest["MA200"]:
-        score += 1
-    else:
-        score -= 1
+    score += 1 if latest["MA50"] > latest["MA200"] else -1
 
     # RSI
     if latest["RSI"] < 30:
@@ -72,10 +66,7 @@ def analyze_stock(data):
         score -= 1
 
     # MACD
-    if latest["MACD"] > latest["Signal"]:
-        score += 1
-    else:
-        score -= 1
+    score += 1 if latest["MACD"] > latest["Signal"] else -1
 
     # Bollinger
     if latest["Close"] < latest["BB_Lower"]:
@@ -83,7 +74,7 @@ def analyze_stock(data):
     elif latest["Close"] > latest["BB_Upper"]:
         score -= 1
 
-    # Final Decision
+    # Decision
     if score >= 2:
         decision = "BUY"
     elif score <= -2:
@@ -91,9 +82,9 @@ def analyze_stock(data):
     else:
         decision = "HOLD"
 
-    return decision, latest, data
+    return decision, latest, data, score
 
-# ================= SESSION STATE =================
+# ================= SESSION =================
 if "last_decision" not in st.session_state:
     st.session_state.last_decision = None
 
@@ -102,20 +93,18 @@ if st.button("Analyze Stock"):
     try:
         data = yf.download(stock, period="1y")
 
-        # Handle multi-index columns
         if isinstance(data.columns, pd.MultiIndex):
             data.columns = data.columns.get_level_values(0)
 
         if data.empty:
-            st.error("Invalid stock symbol")
+            st.error("❌ Invalid stock symbol")
             st.stop()
 
-        decision, latest, data = analyze_stock(data)
+        decision, latest, data, score = analyze_stock(data)
 
         # ================= RESULT =================
         st.subheader(f"📊 Decision for {stock}")
 
-        # Show decision
         if decision == "BUY":
             st.success("📈 BUY")
         elif decision == "SELL":
@@ -123,26 +112,29 @@ if st.button("Analyze Stock"):
         else:
             st.warning("⚖️ HOLD")
 
-        # ================= PLAY SOUND =================
+        # ================= SOUND =================
         if decision != st.session_state.last_decision:
             if decision == "BUY":
-                play_sound("buy.mp3")
+                play_sound("assets/buy.mp3")
             elif decision == "SELL":
-                play_sound("sell.mp3")
+                play_sound("assets/sell.mp3")
 
         st.session_state.last_decision = decision
 
+        # ================= CONFIDENCE =================
+        confidence = min(abs(score) / 4 * 100, 100)
+        st.progress(int(confidence))
+        st.write(f"Confidence Score: **{round(confidence, 2)}%**")
+
         # ================= METRICS =================
         col1, col2, col3 = st.columns(3)
-
         col1.metric("Price", round(latest["Close"], 2))
         col2.metric("RSI", round(latest["RSI"], 2))
         col3.metric("MACD", round(latest["MACD"], 2))
 
         # ================= PRICE =================
         st.subheader("📈 Price + Moving Averages")
-
-        fig1, ax1 = plt.subplots(figsize=(7, 3))
+        fig1, ax1 = plt.subplots()
         ax1.plot(data["Close"], label="Price")
         ax1.plot(data["MA50"], label="MA50")
         ax1.plot(data["MA200"], label="MA200")
@@ -151,18 +143,15 @@ if st.button("Analyze Stock"):
 
         # ================= RSI =================
         st.subheader("📊 RSI")
-
-        fig2, ax2 = plt.subplots(figsize=(7, 2.5))
-        ax2.plot(data["RSI"], label="RSI")
+        fig2, ax2 = plt.subplots()
+        ax2.plot(data["RSI"])
         ax2.axhline(70)
         ax2.axhline(30)
-        ax2.legend()
         st.pyplot(fig2)
 
         # ================= MACD =================
         st.subheader("📉 MACD")
-
-        fig3, ax3 = plt.subplots(figsize=(7, 2.5))
+        fig3, ax3 = plt.subplots()
         ax3.plot(data["MACD"], label="MACD")
         ax3.plot(data["Signal"], label="Signal")
         ax3.legend()
@@ -170,18 +159,15 @@ if st.button("Analyze Stock"):
 
         # ================= BOLLINGER =================
         st.subheader("📊 Bollinger Bands")
-
-        fig4, ax4 = plt.subplots(figsize=(7, 3))
-        ax4.plot(data["Close"], label="Price")
-        ax4.plot(data["BB_Upper"], linestyle="--", label="Upper")
-        ax4.plot(data["BB_Lower"], linestyle="--", label="Lower")
-        ax4.legend()
+        fig4, ax4 = plt.subplots()
+        ax4.plot(data["Close"])
+        ax4.plot(data["BB_Upper"], linestyle="--")
+        ax4.plot(data["BB_Lower"], linestyle="--")
         st.pyplot(fig4)
 
         # ================= VOLUME =================
         st.subheader("📦 Volume")
-
-        fig5, ax5 = plt.subplots(figsize=(7, 2.5))
+        fig5, ax5 = plt.subplots()
         ax5.bar(range(len(data)), data["Volume"])
         st.pyplot(fig5)
 
